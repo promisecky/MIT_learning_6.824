@@ -1,0 +1,4 @@
+g++ -fpic -c map_reduce_fun.cc
+g++ -shared map_reduce_fun.o -o libfun.so
+g++ worker.cc -ldl -o worker -lzmq -pthread
+g++ master.cc -lzmq -pthread -o master
