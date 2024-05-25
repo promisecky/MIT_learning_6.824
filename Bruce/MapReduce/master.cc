@@ -24,6 +24,9 @@ public:
     // 获取文件名
     void get_files(int argc, char *argv[]);
 
+    // worker 完成任务后记录
+    bool mapTasksHaveDone(string map_tasks);
+
     // 获取map任务
     string get_map_tasks();
 
@@ -48,6 +51,19 @@ private:
     // 完成的任务
     vector<string> finished_map_tasks;
 };
+
+/**
+ * @brief 记录map任务完成
+ * @param map任务的名称
+ * @return NULL
+ */
+
+bool Master::mapTasksHaveDone(string map_tasks)
+{
+    lock_guard<mutex> lock(m_mutex);
+    finished_map_tasks.push_back(map_tasks);
+    return true;
+}
 
 /**
  * @brief 获取map任务数量
@@ -149,6 +165,8 @@ int main(int argc, char *argv[])
     server.bind("get_map_tasks", &Master::get_map_tasks, &master);
     server.bind("get_mapwork_num", &Master::get_mapwork_num, &master);
     server.bind("get_reducework_num", &Master::get_reducework_num, &master);
+    server.bind("mapTasksHaveDone", &Master::mapTasksHaveDone, &master);
+    server.bind("is_map_done", &Master::is_map_done, &master);
     server.run();
 
     return 0;

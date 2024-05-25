@@ -6,7 +6,9 @@
 #include <dlfcn.h>
 #include <thread>
 #include <sys/stat.h>
+#include <boost/filesystem.hpp>
 #include <mutex>
+#include <condition_variable>
 #include "./buttonrpc-master/buttonrpc.hpp"
 
 using namespace std;
@@ -23,8 +25,17 @@ struct KeyValue
 typedef std::vector<KeyValue> (*MapFun)(KeyValue kv);
 MapFun map_fun;
 
+// 初始化锁变量
 mutex m_mutex;
-int map_worket_id;
+
+// 初始化条件变量
+condition_variable cv;
+
+// 用于判断条件变量是否满足要求的map任务数量
+int target_map_num;
+
+// map 和 reduce 进程的id
+int map_id = 0, reduce_id = 0;
 
 std::string readFile(const std::string &fileName)
 {
@@ -58,7 +69,7 @@ void writeKVs(const std::vector<KeyValue> &keyValues, const int &map_worker_id, 
 {
     // 根据字符串key分配文件
     // 获取reduce任务数量
-    
+
     vector<ofstream> filenames;
 
     for (int i = 0; i < reduce_tasks_num; i++)
@@ -87,6 +98,10 @@ void writeKVs(const std::vector<KeyValue> &keyValues, const int &map_worker_id, 
     }
 }
 
+/**
+ * @breif map worker 线程工作函数
+ *
+ */
 void map_worker()
 {
     // 每个worker线程初始化一个client
@@ -95,7 +110,7 @@ void map_worker()
 
     // 设置map_workID
     m_mutex.lock();
-    int map_worker_id = map_worket_id++;
+    int map_worker_id = map_id++;
     m_mutex.unlock();
 
     // 获取分配的map任务名称
@@ -121,10 +136,111 @@ void map_worker()
         // cout << "map_worker 中的reduce任务数量 " << reduce_tasks_num << endl;
         // 将结果写入文件
         writeKVs(map_result, map_worker_id, reduce_tasks_num);
+
+        // 文件处理完成，通知master
+        if (client.call<bool>("mapTasksHaveDone", map_tasks).val())
+        {
+            // 当完成所有map任务时，通知master进行reduce工作
+            if (client.call<bool>("is_map_done").val())
+            {
+                cv.notify_one();
+            }
+            cout << "map_worker " << map_worker_id << " have done the " << map_tasks << endl;
+        }
+        else
+        {
+            cout << "map_worker " << map_worker_id << " failed complete the " << map_tasks << endl;
+        }
     }
     else
     {
-        cout << "map_worker " << map_worker_id << "don't get any map tasks Done!" << endl;
+        cout << "map_worker " << map_worker_id << " don't get any map tasks Done!" << endl;
+    }
+}
+
+// 读取文件夹中所有文件的函数，用于获取reduce的原数据
+std::vector<std::string> getFilesInDirectory(const std::string &directoryPath)
+{
+    std::vector<std::string> files;
+
+    try
+    {
+        for (const auto &entry : boost::filesystem::directory_iterator(directoryPath))
+        {
+            if (boost::filesystem::is_regular_file(entry.path()))
+            {
+                files.push_back(entry.path().filename().string());
+            }
+        }
+    }
+    catch (const boost::filesystem::filesystem_error &err)
+    {
+        std::cerr << "Filesystem error: " << err.what() << std::endl;
+    }
+    catch (const std::exception &ex)
+    {
+        std::cerr << "General exception: " << ex.what() << std::endl;
+    }
+
+    return files;
+}
+
+/***
+ * @brief reduce worker线程工作函数
+ *
+ *
+ */
+void reduce_worker()
+{
+    // 每个worker线程初始化一个client
+    buttonrpc client;
+    client.as_client("127.0.0.1", 55555);
+
+    // 设置map_workID
+    m_mutex.lock();
+    int reduce_worker_id = reduce_id++;
+    m_mutex.unlock();
+
+    std::string reduceDataDir = "./reduce-" + to_string(reduce_worker_id);
+
+    // 获取reduce数据源文件
+    m_mutex.lock();
+    cout << "dir is : " << reduceDataDir << endl;
+    vector<string> getFiles = getFilesInDirectory(reduceDataDir);
+    m_mutex.unlock();
+
+    m_mutex.lock();
+    cout << "reduce_worker " << reduce_worker_id << " read file: ";
+    // 打印每个reduce线程读取到的getFiles文件
+    for (const auto &file : getFiles)
+    {
+        cout << file << " ";
+    }
+    m_mutex.unlock();
+}
+
+// 删除上一次的输出文件夹和文件
+
+void deleteReduceDirectories(const std::string &directoryPath)
+{
+    try
+    {
+        for (const auto &entry : boost::filesystem::directory_iterator(directoryPath))
+        {
+            if (boost::filesystem::is_directory(entry.path()) && entry.path().filename().string().find("reduce-") == 0)
+            {
+                // std::cout << "Deleting directory: " << entry.path().string() << std::endl;
+                boost::filesystem::remove_all(entry.path());
+            }
+        }
+    }
+    catch (const boost::filesystem::filesystem_error &err)
+    {
+        std::cerr << "Filesystem error: " << err.what() << std::endl;
+    }
+    catch (const std::exception &ex)
+    {
+        std::cerr << "General exception: " << ex.what() << std::endl;
     }
 }
 
@@ -153,28 +269,53 @@ int main(int argc, char const *argv[])
         return 1;
     }
 
-    // 获取map任务数量
-    int map_workers = 0;
-    map_workers = client.call<int>("get_mapwork_num").val();
+    // 删除上一次的reduce文件
+    deleteReduceDirectories(".");
 
-    cout << "map_workers: " << map_workers << endl;
+    // 获取map worker和reduce worker的数量
+    int map_worker_num = 0;
+    int reduce_worker_num = 0;
+    map_worker_num = client.call<int>("get_mapwork_num").val();
+    reduce_worker_num = client.call<int>("get_reducework_num").val();
+
+    cout << "map_workers: " << map_worker_num << endl;
+    cout << "reduce_workers: " << reduce_worker_num << endl;
 
     // 创建输出文件夹，如果不存在
-    int reduce_worker_num = client.call<int>("get_reducework_num").val();
-    for(int i = 0; i < reduce_worker_num; i++){
+    for (int i = 0; i < reduce_worker_num; i++)
+    {
         std::string outputDir = "reduce-" + to_string(i);
-        if (mkdir(outputDir.c_str(), 0755) == -1) {
+        if (mkdir(outputDir.c_str(), 0755) == -1)
+        {
             std::cerr << "Error creating directory: " << strerror(errno) << '\n';
         }
     }
-    
+
     // 创建map worker线程
     vector<thread> map_threads;
-    for (int i = 0; i < map_workers; i++)
+    for (int i = 0; i < map_worker_num; i++)
     {
         map_threads.push_back(thread(map_worker));
-        map_threads[i].join();
+        map_threads[i].detach();
     }
+
+    {
+        // 条件变量阻塞并唤醒，当map任务都完成后再创建reduce线程
+        unique_lock<mutex> lck(m_mutex);
+        cv.wait(lck, [&]
+                { return client.call<bool>("is_map_done").val(); });
+    }
+
+    // 创建reduce worker线程
+    vector<thread> reduce_threads;
+    for (int i = 0; i < reduce_worker_num; i++)
+    {
+        cout << "reduce thread id" << i << endl;
+        reduce_threads.push_back(thread(reduce_worker));
+        reduce_threads[i].join();
+    }
+
+    // sleep(10);
 
     return 0;
 }
