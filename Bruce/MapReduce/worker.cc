@@ -76,7 +76,7 @@ void writeKVs(const std::vector<KeyValue> &keyValues, const int &map_worker_id, 
 
     for (int i = 0; i < reduce_tasks_num; i++)
     {
-        string filename = "reduce-" + to_string(i) + "/mr-" + to_string(map_worker_id);
+        string filename = "reduce-" + to_string(i) + "/mr-" + to_string(map_worker_id + keyValues.size());
         // cout << "file name is :" << filename << endl;
         std::ofstream file(filename);
         if (!file.is_open())
@@ -114,55 +114,54 @@ void map_worker()
     int map_worker_id = map_id++;
     m_mutex.unlock();
 
-    // while (1)
-    // {
-
-    // 获取分配的map任务名称
-    string map_tasks = client.call<string>("get_map_tasks").val();
-
-    // 如果任务名称不为empty，那么就进行map函数
-    if (map_tasks != "empty")
+    while (1)
     {
-        std::cout << "map_worker " << map_worker_id << " get map_tasks: " << map_tasks << endl;
-
-        // // 模拟map线程超时
-        // if (map_worker_id % 2 == 0)
-        // {
-        //     while (1)
-        //     {
-        //         sleep(1200);
-        //     }
-        // }
-        // 读取文件
-        string file_content = readFile(map_tasks);
-
-        // 构造kv
-        KeyValue kv;
-        kv.key = map_tasks;
-        kv.value = file_content;
-
-        // map 函数进行处理
-        vector<KeyValue> map_result = map_fun(kv);
-
-        // 获取reduce任务数量
-        int reduce_tasks_num = client.call<int>("get_reducework_num").val();
-        // cout << "map_worker 中的reduce任务数量 " << reduce_tasks_num << endl;
-        // 将结果写入文件
-        writeKVs(map_result, map_worker_id, reduce_tasks_num);
-
-        // 文件处理完成，通知master
-        if (client.call<bool>("mapTasksHaveDone", map_tasks).val())
-        {
-            std::cout << "map_worker " << map_worker_id << " have done the " << map_tasks << endl;
-        }
         // 当完成所有map任务时，通知master进行reduce工作
         if (client.call<bool>("is_map_done").val())
         {
             cv.notify_one();
             return;
         }
+        // 获取分配的map任务名称
+        string map_tasks = client.call<string>("get_map_tasks").val();
+
+        // 如果任务名称不为empty，那么就进行map函数
+        if (map_tasks != "empty")
+        {
+            std::cout << "map_worker " << map_worker_id << " get map_tasks: " << map_tasks << endl;
+
+            // 模拟map线程超时
+            if (map_worker_id % 3 == 0)
+            {
+                while (1)
+                {
+                    sleep(1200);
+                }
+            }
+            // 读取文件
+            string file_content = readFile(map_tasks);
+
+            // 构造kv
+            KeyValue kv;
+            kv.key = map_tasks;
+            kv.value = file_content;
+
+            // map 函数进行处理
+            vector<KeyValue> map_result = map_fun(kv);
+
+            // 获取reduce任务数量
+            int reduce_tasks_num = client.call<int>("get_reducework_num").val();
+            // cout << "map_worker 中的reduce任务数量 " << reduce_tasks_num << endl;
+            // 将结果写入文件
+            writeKVs(map_result, map_worker_id, reduce_tasks_num);
+
+            // 文件处理完成，通知master
+            if (client.call<bool>("mapTasksHaveDone", map_tasks).val())
+            {
+                std::cout << "map_worker " << map_worker_id << " have done the " << map_tasks << endl;
+            }
+        }
     }
-    // }
 }
 
 // 读取文件夹中所有文件的函数，用于获取reduce的原数据

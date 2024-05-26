@@ -12,7 +12,7 @@
 using namespace std;
 
 #define map_timer_ 2
-#define reduce_timer_ 9
+#define reduce_timer_ 3
 
 class Master
 {
@@ -163,14 +163,18 @@ string Master::get_map_tasks()
     lock_guard<mutex> lock(m_mutex);
     if (!m_files.empty())
     {
+        cout << "original m_files's number: " << m_files.size();
+
         task_name = m_files.front();
         m_files.pop_front();
         running_map_tasks.push_back(task_name);
 
-        // // 此处调用计时线程
-        // //  创建计时线程
-        // thread timer_thread(&Master::map_timer, this);
-        // timer_thread.detach();
+        cout << " after m_files's number: " << m_files.size() << endl;
+
+        // 此处调用计时线程
+        //  创建计时线程
+        thread timer_thread(&Master::map_timer, this);
+        timer_thread.detach();
         return task_name;
     }
     else
