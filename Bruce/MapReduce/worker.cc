@@ -36,6 +36,9 @@ condition_variable cv;
 // 用于判断条件变量是否满足要求的map任务数量
 int target_map_num;
 
+// 用于输出结果
+int result_num = 0;
+
 // map 和 reduce 进程的id
 int map_id = 0, reduce_id = 0;
 
@@ -255,36 +258,74 @@ void reduce_worker()
     buttonrpc client;
     client.as_client("127.0.0.1", 55555);
 
-    // 设置map_workID
+    // 设置reduce_workID
     m_mutex.lock();
     int reduce_worker_id = reduce_id++;
     m_mutex.unlock();
 
-    std::string reduceDataDir = "./reduce-" + to_string(reduce_worker_id);
+    while (1)
+    {
+        if (client.call<bool>("is_reduce_done").val())
+        {
+            return;
+        }
 
-    // 获取reduce数据源文件
-    m_mutex.lock();
-    vector<string> getFiles = getFilesInDirectory(reduceDataDir);
-    m_mutex.unlock();
+        // 获取分配的reduce任务
+        string reduceDataDir = client.call<string>("get_reduce_tasks").val();
 
-    std::map<string, string> kvs = shuffle(reduceDataDir, getFiles);
-    vector<string> reduce_result = reduce_fun(kvs);
-    // 将结果写入文件
-    reduceWrite(reduce_worker_id, reduce_result);
+        // 如果分配的任务名称不为empty，那么就进行reduce函数
+        if (reduceDataDir != "empty")
+        {
+            // 模拟reduce任务的线程宕机
+            if (reduce_worker_id % 4 == 0)
+            {
+                while (1)
+                {
+                    sleep(1500);
+                }
+            }
+            //  获取reduce数据源文件
+            vector<string> getFiles = getFilesInDirectory(reduceDataDir);
+            std::map<string, string> kvs = shuffle(reduceDataDir, getFiles);
+            vector<string> reduce_result = reduce_fun(kvs);
+            // 将结果写入文件
+            m_mutex.lock();
+            int result_file_name = result_num++;
+            m_mutex.unlock();
+            reduceWrite(result_file_name, reduce_result);
+
+            // 文件处理完成，通知master
+            if (client.call<bool>("reduceTasksHaveDone", reduceDataDir).val())
+            {
+                std::cout << "map_worker " << reduce_worker_id << " have done the " << reduceDataDir << endl;
+            }
+        }
+    }
 }
 
 // 删除上一次的输出文件夹和文件
 
-void deleteReduceDirectories(const std::string &directoryPath)
+void deleteEntries(const std::string &directoryPath, const std::string &prefix)
 {
     try
     {
         for (const auto &entry : boost::filesystem::directory_iterator(directoryPath))
         {
-            if (boost::filesystem::is_directory(entry.path()) && entry.path().filename().string().find("reduce-") == 0)
+            if (prefix == "reduce-")
             {
-                // std::cout << "Deleting directory: " << entry.path().string() << std::endl;
-                boost::filesystem::remove_all(entry.path());
+                if (boost::filesystem::is_directory(entry.path()) && entry.path().filename().string().find(prefix) == 0)
+                {
+                    std::cout << "Deleting directory: " << entry.path().string() << std::endl;
+                    boost::filesystem::remove_all(entry.path());
+                }
+            }
+            else if (prefix == "rm-")
+            {
+                if (boost::filesystem::is_regular_file(entry.path()) && entry.path().filename().string().find(prefix) == 0)
+                {
+                    std::cout << "Deleting file: " << entry.path().string() << std::endl;
+                    boost::filesystem::remove(entry.path());
+                }
             }
         }
     }
@@ -332,7 +373,8 @@ int main(int argc, char const *argv[])
     }
 
     // 删除上一次的reduce文件
-    deleteReduceDirectories(".");
+    deleteEntries(".", "reduce-");
+    deleteEntries(".", "rm");
 
     // 获取map worker和reduce worker的数量
     int map_worker_num = 0;
@@ -373,10 +415,15 @@ int main(int argc, char const *argv[])
     for (int i = 0; i < reduce_worker_num; i++)
     {
         reduce_threads.push_back(thread(reduce_worker));
-        reduce_threads[i].join();
+        reduce_threads[i].detach();
+    }
+
+    while (!client.call<bool>("is_all_done").val())
+    {
+        sleep(4);
     }
     // 删除中间生成的reduce文件
-    deleteReduceDirectories(".");
+    deleteEntries(".", "reduce-");
 
     return 0;
 }
