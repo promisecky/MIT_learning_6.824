@@ -1,19 +1,27 @@
 #include <iostream>
 #include <vector>
+#include <set>
 #include <string>
 #include <list>
+#include <thread>
 #include "./buttonrpc-master/buttonrpc.hpp"
 #include <bits/stdc++.h>
 #include <mutex>
+#include <chrono>
 
 using namespace std;
+
+#define map_timer_ 2
+#define reduce_timer_ 9
 
 class Master
 {
 public:
     // 构造函数
     Master(int map_tasks, int reduce_tasks) : m_map_tasks(map_tasks),
-                                              m_reduce_tasks(reduce_tasks){};
+                                              m_reduce_tasks(reduce_tasks),
+                                              cur_map_task(0),
+                                              cur_reduce_task(0){};
 
     // 获取mapwork任务数量
     int get_mapwork_num();
@@ -33,6 +41,9 @@ public:
     // 判断map任务是否都完成
     bool is_map_done();
 
+    // 计时线程函数
+    void map_timer();
+
 private:
     // 设置锁
     mutex m_mutex;
@@ -40,6 +51,10 @@ private:
     // 设置map worker和reduce worker的数量
     int m_map_tasks;
     int m_reduce_tasks;
+
+    // map 和 reduce 任务指针
+    int cur_map_task;
+    int cur_reduce_task;
 
     // 存储map文件名列表和文件数量
     list<string> m_files;
@@ -49,7 +64,7 @@ private:
     vector<string> running_map_tasks;
 
     // 完成的任务
-    vector<string> finished_map_tasks;
+    multiset<string> finished_map_tasks;
 };
 
 /**
@@ -61,7 +76,7 @@ private:
 bool Master::mapTasksHaveDone(string map_tasks)
 {
     lock_guard<mutex> lock(m_mutex);
-    finished_map_tasks.push_back(map_tasks);
+    finished_map_tasks.insert(map_tasks);
     return true;
 }
 
@@ -107,6 +122,30 @@ void Master::get_files(int argc, char *argv[])
 }
 
 /**
+ * @brief 计时线程函数
+ * @param 传入对象指针
+ * @return NULL
+ *
+ **/
+
+void Master::map_timer()
+{
+
+    // map 任务计时
+    std::this_thread::sleep_for(std::chrono::seconds(map_timer_));
+
+    // 计时完成判断map任务是否完成
+    m_mutex.lock();
+    string map_task = running_map_tasks[cur_map_task++];
+    if (finished_map_tasks.find(map_task) == finished_map_tasks.end())
+    {
+        // 如果没有完成则将任务重新分配
+        m_files.push_back(map_task);
+    }
+    m_mutex.unlock();
+}
+
+/**
  * @brief 获取map任务
  * @param NULL
  * @return 返回map任务
@@ -127,6 +166,11 @@ string Master::get_map_tasks()
         task_name = m_files.front();
         m_files.pop_front();
         running_map_tasks.push_back(task_name);
+
+        // // 此处调用计时线程
+        // //  创建计时线程
+        // thread timer_thread(&Master::map_timer, this);
+        // timer_thread.detach();
         return task_name;
     }
     else

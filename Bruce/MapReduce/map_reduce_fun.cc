@@ -1,7 +1,7 @@
 #include <string>
 #include <iostream>
-#include <map>
 #include <vector>
+#include <map>
 
 /**
  * @brief Defines a key-value data type.
@@ -44,7 +44,31 @@ extern "C" std::vector<KeyValue> map_fun(KeyValue kv)
             }
         }
     }
-    output.push_back(KeyValue{temp, "1"});
+    // 确保最后一个单词被添加到输出中
+    if (!temp.empty())
+    {
+        output.push_back(KeyValue{temp, "1"});
+    }
 
     return output;
+}
+
+/***
+ * @brief reduce 函数 将 <"a", "111111"> 形式数据转换成 "a 6" 形式
+ * @param kvs
+ * @return vectored output
+ */
+
+extern "C" std::vector<std::string> reduce_fun(std::map<std::string, std::string> kvs)
+{
+    std::vector<std::string> result;
+    for (auto kv : kvs)
+    {
+        result.emplace_back(kv.first + " " + std::to_string(kv.second.size()));
+        if (kv.first == "1")
+        {
+            std::cout << kv.first << " " << kv.second << std::endl;
+        }
+    }
+    return result;
 }
