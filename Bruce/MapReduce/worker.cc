@@ -341,8 +341,8 @@ int main(int argc, char const *argv[])
     map_worker_num = client.call<int>("get_mapwork_num").val();
     reduce_worker_num = client.call<int>("get_reducework_num").val();
 
-    cout << "map_workers: " << map_worker_num << endl;
-    cout << "reduce_workers: " << reduce_worker_num << endl;
+    std::cout << "map_workers: " << map_worker_num << endl;
+    std::cout << "reduce_workers: " << reduce_worker_num << endl;
 
     // 创建输出文件夹，如果不存在
     for (int i = 0; i < reduce_worker_num; i++)
